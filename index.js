@@ -8,9 +8,11 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+const nodes = {};
+const MAX_CONNECTION_PER_IP = 4;
+
 function proxySender(ws, conn) {
   ws.on('close', () => {
-    console.log('[Proxy] Websocket connection is closed!');
     conn.end();
   });
 
@@ -33,7 +35,6 @@ function proxyReceiver(conn, cmdq) {
     cmdq.send(data.toString());
   });
   conn.on('end', () => {
-    console.log(`[Proxy] Pool connection is closed!`);
     cmdq.close();
   });
   conn.on('error', (err) => {
@@ -43,14 +44,36 @@ function proxyReceiver(conn, cmdq) {
 }
 
 function proxyConnect(host, port) {
-  const conn = net.createConnection(port, host, () => {
-    console.log('[Proxy] Connected to mining pool!');
-  });
-
+  const conn = net.createConnection(port, host);
   return conn;
 }
 
+function uidv1() {
+  const s4 = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
+  return [s4(), s4(), s4(), s4(), s4(), s4()].join('-');
+};
+
 function proxyMain(ws, req) {
+  const ip = req.socket.remoteAddress;
+  const uid = uidv1();
+
+  if (!nodes[ip]) nodes[ip] = [];
+
+  nodes[ip].push(uid);
+
+  if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
+    nodes[ip] = nodes[ip].filter(o => o !== uid);
+    ws.send(`[${MAX_CONNECTION_PER_IP} connections per IP] Rate limit error !!!`);
+    return;
+  }
+
+  ws.on('close', () => {
+    nodes[ip] = nodes[ip].filter(o => o !== uid);
+    if (nodes[ip].length === 0) {
+      delete nodes[ip];
+    }
+  });
+
   ws.on('message', (message) => {
     const command = JSON.parse(message);
     if (command.method === 'proxy.connect' && command.params.length === 2) {
@@ -58,7 +81,7 @@ function proxyMain(ws, req) {
       if (!host || !port) {
         ws.close();
         return;
-      } 
+      }
 
       const conn = proxyConnect(host, port);
       if (conn) {
