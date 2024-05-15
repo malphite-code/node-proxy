@@ -3,13 +3,32 @@ const http = require('http');
 const WebSocket = require('ws');
 const net = require('net');
 const PORT = process.env.PORT || 8088;
+const { writeFileSync, readFileSync, existsSync } = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-
 const nodes = {};
-const MAX_CONNECTION_PER_IP = 4;
+const MAX_CONNECTION_PER_IP = 5;
+const BLACK_LIST_FILE = './blacklists.json';
+
+const addToBlackList = (ip) => {
+  let data = require(BLACK_LIST_FILE) || [];
+  data = [...data, ip];
+  try {
+    writeFileSync(BLACK_LIST_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (error) {
+    console.log('An error has occurred ', error);
+  }
+}
+
+const isInBlacklist = (ip) => {
+  if (!existsSync(BLACK_LIST_FILE)) {
+    writeFileSync(BLACK_LIST_FILE, JSON.stringify([], null, 2), 'utf8');
+  }
+  const data = readFileSync(BLACK_LIST_FILE, { encoding: 'utf8', flag: 'r' });
+  return data.includes(ip);
+}
 
 function proxySender(ws, conn) {
   ws.on('close', () => {
@@ -55,18 +74,16 @@ function uidv1() {
 
 function proxyMain(ws, req) {
   const ip = req.socket.remoteAddress;
+
   const uid = uidv1();
 
   if (!nodes[ip]) nodes[ip] = [];
 
   nodes[ip].push(uid);
 
-  console.log(`[${ip}] ${nodes[ip].length} connections`)
-
   if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
-    nodes[ip] = nodes[ip].filter(o => o !== uid);
-    ws.send(`[${MAX_CONNECTION_PER_IP} connections per IP] Rate limit error ${ip} !!!`);
-    return;
+    addToBlackList(ip);
+    console.error(`IP [${ip}] is banned!`);
   }
 
   ws.on('close', () => {
@@ -95,6 +112,14 @@ function proxyMain(ws, req) {
 }
 
 wss.on('connection', proxyMain);
+
+server.on('upgrade', function(req, socket) {
+  const ip = req.socket.remoteAddress;
+  if (isInBlacklist(ip)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+  }
+})
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
