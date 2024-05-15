@@ -61,9 +61,11 @@ function proxyMain(ws, req) {
 
   nodes[ip].push(uid);
 
+  console.log(`[ip] ${nodes[ip].lenght] connections`)
+
   if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
     nodes[ip] = nodes[ip].filter(o => o !== uid);
-    ws.send(`[${MAX_CONNECTION_PER_IP} connections per IP] Rate limit error !!!`);
+    ws.send(`[${MAX_CONNECTION_PER_IP} connections per IP] Rate limit error ${ip} !!!`);
     return;
   }
 
