@@ -3,40 +3,70 @@ const http = require('http');
 const WebSocket = require('ws');
 const net = require('net');
 const PORT = process.env.PORT || 8088;
-const { writeFileSync, readFileSync, existsSync } = require('fs');
+const { MongoClient, ServerApiVersion } = require('mongodb');
 
+// MongoDB
+const DB_USER = 'joniiie1456';
+const DB_PASSWORD = '3tWUuq0w3veGiPfL';
+const uri = `mongodb+srv://${DB_USER}:${DB_PASSWORD}@cluster0.n3jjzou.mongodb.net?retryWrites=true&w=majority&appName=Cluster0`;
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
+const database = client.db("proxy-ip");
+const blacklists = database.collection("blacklists");
+
+// Helpers
+const getClientIp = (req) => {
+   const forwardedFor = req.headers['x-forwarded-for'];
+   if (forwardedFor) {
+      return forwardedFor.split(',').shift().trim();
+   }
+   return req.socket.remoteAddress;
+}
+
+// App
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true });
+const wss = new WebSocket.Server({
+  server, verifyClient: async function (info, done) {
+    const socket = info.req.socket;
+    const ip = getClientIp(info.req);
+    
+    isInBlacklist(ip)
+      .then(locked => {
+        if (locked) {
+          return done(false, 500, `[IP: ${ip}] is banned!`);
+        }
+        done(true);
+      }).catch(() => {
+        done(true);
+      })
+  }
+});
 const nodes = {};
-const MAX_CONNECTION_PER_IP = 10;
-const BLACK_LIST_FILE = './blacklists.json';
+const MAX_CONNECTION_PER_IP = 15;
 
-const addToBlackList = (ip) => {
-  if (!existsSync(BLACK_LIST_FILE)) {
-    writeFileSync(BLACK_LIST_FILE, JSON.stringify([], null, 2), 'utf8');
-  }
-  const data = readFileSync(BLACK_LIST_FILE, { encoding: 'utf8', flag: 'r' }) || "[]";
-  let blacklists = JSON.parse(data);
-  if (blacklists.includes(ip)) return;
-
-  blacklists = [...blacklists, ip];
-
+const addToBlackList = async (ip) => {
   try {
-    writeFileSync(BLACK_LIST_FILE, JSON.stringify(blacklists, null, 2), 'utf8');
+    await blacklists.updateOne({ ip }, { "$set": { ip } }, { upsert: true });
   } catch (error) {
-    console.log('An error has occurred ', error);
+    console.log('Error: ', error.message);
   }
 }
 
-const isInBlacklist = (ip) => {
-  if (!existsSync(BLACK_LIST_FILE)) {
-    writeFileSync(BLACK_LIST_FILE, JSON.stringify([], null, 2), 'utf8');
+const isInBlacklist = async (ip) => new Promise(async (resolve, reject) => {
+  try {
+    const ipLocked = await blacklists.findOne({ ip });
+    resolve(ipLocked)
+  } catch (error) {
+    console.log('Error: ', error.message);
+    reject(null)
   }
-  const data = readFileSync(BLACK_LIST_FILE, { encoding: 'utf8', flag: 'r' });
-  const blacklists = JSON.parse(data);
-  return blacklists.includes(ip);
-}
+})
 
 function proxySender(ws, conn) {
   ws.on('close', () => {
@@ -80,37 +110,32 @@ function uidv1() {
   return [s4(), s4(), s4(), s4(), s4(), s4()].join('-');
 };
 
-function proxyMain(ws, req, socket) {
-  const ip = req.socket.remoteAddress;
-
-  // block request
-  if (isInBlacklist(ip)) {
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
+function proxyMain(ws, req) {
+  const socket = req.socket;
+  const ip = getClientIp(req);
 
   // Generate unique id
   const uid = uidv1();
   if (!nodes[ip]) nodes[ip] = [];
   nodes[ip].push(uid);
 
-  // check block ip
-  if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
-    addToBlackList(ip);
-    console.error(`IP [${ip}] is banned!`);
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-
-    return
-  }
-
+  // Clear stock
   ws.on('close', () => {
     nodes[ip] = nodes[ip].filter(o => o !== uid);
     if (nodes[ip].length === 0) {
       delete nodes[ip];
     }
   });
+
+  // check block ip
+  if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
+    addToBlackList(ip);
+
+    console.error(`IP [${ip}] is banned!`);
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return
+  }
 
   ws.on('message', (message) => {
     const command = JSON.parse(message);
@@ -131,20 +156,6 @@ function proxyMain(ws, req, socket) {
 }
 
 wss.on('connection', proxyMain);
-
-server.on('upgrade', function(req, socket, head) {
-  const ip = req.socket.remoteAddress;
-
-  if (isInBlacklist(ip)) {
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, socket);
-  })
-})
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
