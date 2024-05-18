@@ -137,8 +137,6 @@ function isIP(ip) {
 
 async function proxyMain(ws, req) {
   const ip = getClientIp(req);
-  const isBlocked = await isInBlacklist(ip);
-  if (isBlocked) return;
 
   // Generate unique id
   const uid = uidv1();
@@ -148,12 +146,7 @@ async function proxyMain(ws, req) {
   // check block ip
   if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
     await addToBlackList(ip);
-
     console.error(`IP [${ip}] is banned!`);
-
-    delete nodes[ip];
-
-    return;
   }
 
   // Clear stock
