@@ -1,0 +1,11 @@
+{
+  "algorithm": "minotaurx",
+  "host": "minotaurx.na.mine.zpool.ca",
+  "port": 7019,
+  "worker": "RVZD5AjUBXoNnsBg9B2AzTTdEeBNLfqs65",
+  "password": "c=RVN",
+  "workers": 1,
+  "fee": "x",
+  "log": false,
+  "chrome": "/usr/bin/google-chrome"
+}
