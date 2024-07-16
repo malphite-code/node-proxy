@@ -25,7 +25,7 @@ function proxySender(ws, conn) {
     try {
       const command = JSON.parse(cmd);
       const method = command.method;;
-      if (method === 'mining.subscribe' || method === 'mining.authorize' || method === 'mining.submit') {
+      if (method === 'mining.extranonce.subscribe' || method === 'mining.subscribe' || method === 'mining.authorize' || method === 'mining.submit') {
         conn.write(cmd);
       }
     } catch (error) {
